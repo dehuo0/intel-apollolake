@@ -1,0 +1,35 @@
+From f89804c43287ccd3e0408e60f447f12eebbba90c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bj=C3=B8rn=20Mork?= <bjorn@mork.no>
+Date: Thu, 3 Dec 2015 19:24:23 +0100
+Subject: [PATCH 7/7] MAINTAINERS: add qmi_wwan driver entry
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Bjørn Mork <bjorn@mork.no>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ MAINTAINERS | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 180c63e83507..452fe510a3e7 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -10507,6 +10507,13 @@ L:	linux-usb@vger.kernel.org
+ S:	Supported
+ F:	drivers/usb/class/usblp.c
+ 
++USB QMI WWAN NETWORK DRIVER
++M:	Bjørn Mork <bjorn@mork.no>
++L:	netdev@vger.kernel.org
++S:	Maintained
++F:	Documentation/ABI/testing/sysfs-class-net-qmi
++F:	drivers/net/usb/qmi_wwan.c
++
+ USB RTL8150 DRIVER
+ M:	Petko Manolov <petkan@nucleusys.com>
+ L:	linux-usb@vger.kernel.org
+-- 
+2.11.0
+

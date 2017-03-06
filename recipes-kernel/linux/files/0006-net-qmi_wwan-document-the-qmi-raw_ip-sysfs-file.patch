@@ -1,0 +1,47 @@
+From 0d61db005d2f177ebb9d176c3093793495bbb9ae Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bj=C3=B8rn=20Mork?= <bjorn@mork.no>
+Date: Thu, 3 Dec 2015 19:24:22 +0100
+Subject: [PATCH 6/7] net: qmi_wwan: document the qmi/raw_ip sysfs file
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Bjørn Mork <bjorn@mork.no>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ Documentation/ABI/testing/sysfs-class-net-qmi | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+ create mode 100644 Documentation/ABI/testing/sysfs-class-net-qmi
+
+diff --git a/Documentation/ABI/testing/sysfs-class-net-qmi b/Documentation/ABI/testing/sysfs-class-net-qmi
+new file mode 100644
+index 000000000000..fa5a00bb1143
+--- /dev/null
++++ b/Documentation/ABI/testing/sysfs-class-net-qmi
+@@ -0,0 +1,23 @@
++What:		/sys/class/net/<iface>/qmi/raw_ip
++Date:		Dec 2015
++KernelVersion:	4.4
++Contact:	Bjørn Mork <bjorn@mork.no>
++Description:
++		Boolean.  Default: 'N'
++
++		Set this to 'Y' to change the network device link
++		framing from '802.3' to 'raw-ip'.
++
++		The netdev will change to reflect the link framing
++		mode.  The netdev is an ordinary ethernet device in
++		'802.3' mode, and the driver expects to exchange
++		frames with an ethernet header over the USB link. The
++		netdev is a headerless p-t-p device in 'raw-ip' mode,
++		and the driver expects to echange IPv4 or IPv6 packets
++		without any L2 header over the USB link.
++
++		Userspace is in full control of firmware configuration
++		through the delegation of the QMI protocol. Userspace
++		is responsible for coordination of driver and firmware
++		link framing mode, changing this setting to 'Y' if the
++		firmware is configured for 'raw-ip' mode.
+-- 
+2.11.0
+

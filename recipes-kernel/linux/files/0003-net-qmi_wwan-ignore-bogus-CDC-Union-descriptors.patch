@@ -1,0 +1,44 @@
+From 94b234f6e119897cfaf1a93ff12f58575240a6bf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bj=C3=B8rn=20Mork?= <bjorn@mork.no>
+Date: Thu, 17 Dec 2015 12:44:04 +0100
+Subject: [PATCH 3/7] net: qmi_wwan: ignore bogus CDC Union descriptors
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The CDC descriptors found on these vendor specific functions should
+not be considered authoritative.  They seem to be ignored by drivers
+for other systems, and the quality is therefore low.
+
+One device (1e0e:9001) has been reported to have such a bogus union
+descriptor on the QMI function, making it fail probing even if the
+device id was dynamically added.  The report was not complete enough
+to allow adding a device entry for this modem. But this should at
+least fix the dynamic id probing problem.
+
+Reported-by: Kanerva Topi <Topi.Kanerva@cinia.fi>
+Signed-off-by: Bjørn Mork <bjorn@mork.no>
+Signed-off-by: David S. Miller <davem@davemloft.net>
+---
+ drivers/net/usb/qmi_wwan.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/usb/qmi_wwan.c b/drivers/net/usb/qmi_wwan.c
+index 71809e714377..f97dd79c21bb 100644
+--- a/drivers/net/usb/qmi_wwan.c
++++ b/drivers/net/usb/qmi_wwan.c
+@@ -414,7 +414,10 @@ next_desc:
+ 				"bogus CDC Union: master=%u, slave=%u\n",
+ 				cdc_union->bMasterInterface0,
+ 				cdc_union->bSlaveInterface0);
+-			goto err;
++
++			/* ignore and continue... */
++			cdc_union = NULL;
++			info->data = intf;
+ 		}
+ 	}
+ 
+-- 
+2.11.0
+
