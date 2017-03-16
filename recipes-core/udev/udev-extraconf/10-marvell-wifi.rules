@@ -1,0 +1,4 @@
+#  This file is used to modify the marvell WIFI net port name.
+#  #
+
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="mlan0", NAME="wlan0"

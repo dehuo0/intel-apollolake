@@ -4,6 +4,7 @@ SRC_URI += " \
 	file://power-management-mei.rules \
 	file://persistent-mei.rules \
 	file://pci_pm.rules \
+	file://10-marvell-wifi.rules \
 "
 
 do_install_append() {
@@ -13,4 +14,7 @@ do_install_append() {
 
 	# Install udev rule to enable s0ix support
 	install -m 0644 ${WORKDIR}/pci_pm.rules         ${D}${sysconfdir}/udev/rules.d/pci_pm.rules
+
+	#Install rules to rename mlan to wlan
+	install -m 0644 ${WORKDIR}/10-marvell-wifi.rules         ${D}${sysconfdir}/udev/rules.d/10-marvell-wifi.rules
 }
