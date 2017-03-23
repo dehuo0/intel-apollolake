@@ -1,0 +1,27 @@
+From efe8d95643f72353d712567e751d6a8aefd276c6 Mon Sep 17 00:00:00 2001
+From: Jason Wessel <jason.wessel@windriver.com>
+Date: Wed, 15 Mar 2017 07:53:37 -0700
+Subject: [PATCH 5/5] mwifiex: Change from mlan to wlan for default interface
+ name
+
+Signed-off-by: Jason Wessel <jason.wessel@windriver.com>
+---
+ drivers/net/wireless/mwifiex/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/mwifiex/main.c b/drivers/net/wireless/mwifiex/main.c
+index 03a95c7d34bf..bb716536010e 100644
+--- a/drivers/net/wireless/mwifiex/main.c
++++ b/drivers/net/wireless/mwifiex/main.c
+@@ -519,7 +519,7 @@ static void mwifiex_fw_dpc(const struct firmware *firmware, void *context)
+ 
+ 	rtnl_lock();
+ 	/* Create station interface by default */
+-	wdev = mwifiex_add_virtual_intf(adapter->wiphy, "mlan%d", NET_NAME_ENUM,
++	wdev = mwifiex_add_virtual_intf(adapter->wiphy, "wlan%d", NET_NAME_ENUM,
+ 					NL80211_IFTYPE_STATION, NULL, NULL);
+ 	if (IS_ERR(wdev)) {
+ 		dev_err(adapter->dev, "cannot create default STA interface\n");
+-- 
+2.11.0
+
