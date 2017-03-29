@@ -17,4 +17,5 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0003-mwifiex-support-to-set-multichannel-policy-to-FW.patch \
 	    file://0004-mwifiex-advertise-multichannel-support-to-cfg80211.patch \
 	    file://0005-mwifiex-Change-from-mlan-to-wlan-for-default-interfa.patch \
+	    file://0001-mwifiex-enable-pcie-MSIx-interrupt-mode-support.patch \
 	   "

@@ -1,0 +1,339 @@
+From 391969303a0b09a67ca9c47556f2ca346af4bff5 Mon Sep 17 00:00:00 2001
+From: Xinming Hu <huxm@marvell.com>
+Date: Wed, 29 Mar 2017 10:25:28 +0800
+Subject: [PATCH] mwifiex: enable pcie MSIx interrupt mode support
+
+commit 99074fc1e67b374b5c72406a23ac01fed806d634 upstream
+
+Newer pcie chipsets (8997 onwards) support MSIx. This
+patch enables it.
+
+Signed-off-by: Xinming Hu <huxm@marvell.com>
+Signed-off-by: Amitkumar Karwar <akarwar@marvell.com>
+Signed-off-by: Kalle Valo <kvalo@codeaurora.org>
+[Kevin: Replace mwifiex_dbg() with pr_debug() and drop the change
+for mwifiex_reg_8997]
+Signed-off-by: Kevin Hao <kexin.hao@windriver.com>
+---
+ drivers/net/wireless/mwifiex/pcie.c | 176 ++++++++++++++++++++++++++++++------
+ drivers/net/wireless/mwifiex/pcie.h |  18 +++-
+ 2 files changed, 167 insertions(+), 27 deletions(-)
+
+diff --git a/drivers/net/wireless/mwifiex/pcie.c b/drivers/net/wireless/mwifiex/pcie.c
+index 9979eeff228e..6035fa705aaa 100644
+--- a/drivers/net/wireless/mwifiex/pcie.c
++++ b/drivers/net/wireless/mwifiex/pcie.c
+@@ -2030,7 +2030,8 @@ mwifiex_check_fw_status(struct mwifiex_adapter *adapter, u32 poll_num)
+ /*
+  * This function reads the interrupt status from card.
+  */
+-static void mwifiex_interrupt_status(struct mwifiex_adapter *adapter)
++static void mwifiex_interrupt_status(struct mwifiex_adapter *adapter,
++				     int msg_id)
+ {
+ 	u32 pcie_ireg;
+ 	unsigned long flags;
+@@ -2046,12 +2047,18 @@ static void mwifiex_interrupt_status(struct mwifiex_adapter *adapter)
+ 	if (!mwifiex_pcie_ok_to_access_hw(adapter))
+ 		return;
+ 
+-	if (mwifiex_read_reg(adapter, PCIE_HOST_INT_STATUS, &pcie_ireg)) {
+-		dev_warn(adapter->dev, "Read register failed\n");
+-		return;
+-	}
++	if (card->msix_enable && msg_id >= 0) {
++		pcie_ireg = BIT(msg_id);
++	} else {
++		if (mwifiex_read_reg(adapter, PCIE_HOST_INT_STATUS,
++				     &pcie_ireg)) {
++			pr_debug("Read register failed\n");
++			return;
++		}
++
++		if ((pcie_ireg == 0xFFFFFFFF) || !pcie_ireg)
++			return;
+ 
+-	if ((pcie_ireg != 0xFFFFFFFF) && (pcie_ireg)) {
+ 
+ 		mwifiex_pcie_disable_host_int(adapter);
+ 
+@@ -2061,20 +2068,23 @@ static void mwifiex_interrupt_status(struct mwifiex_adapter *adapter)
+ 			dev_warn(adapter->dev, "Write register failed\n");
+ 			return;
+ 		}
+-		spin_lock_irqsave(&adapter->int_lock, flags);
+-		adapter->int_status |= pcie_ireg;
+-		spin_unlock_irqrestore(&adapter->int_lock, flags);
++	}
+ 
+-		if (!adapter->pps_uapsd_mode &&
+-		    adapter->ps_state == PS_STATE_SLEEP &&
+-		    mwifiex_pcie_ok_to_access_hw(adapter)) {
+-				/* Potentially for PCIe we could get other
+-				 * interrupts like shared. Don't change power
+-				 * state until cookie is set */
+-				adapter->ps_state = PS_STATE_AWAKE;
+-				adapter->pm_wakeup_fw_try = false;
+-				del_timer(&adapter->wakeup_timer);
+-		}
++	spin_lock_irqsave(&adapter->int_lock, flags);
++	adapter->int_status |= pcie_ireg;
++	spin_unlock_irqrestore(&adapter->int_lock, flags);
++	pr_debug("ireg: 0x%08x\n", pcie_ireg);
++
++	if (!adapter->pps_uapsd_mode &&
++	    adapter->ps_state == PS_STATE_SLEEP &&
++	    mwifiex_pcie_ok_to_access_hw(adapter)) {
++		/* Potentially for PCIe we could get other
++		 * interrupts like shared. Don't change power
++		 * state until cookie is set
++		 */
++		adapter->ps_state = PS_STATE_AWAKE;
++		adapter->pm_wakeup_fw_try = false;
++		del_timer(&adapter->wakeup_timer);
+ 	}
+ }
+ 
+@@ -2086,7 +2096,8 @@ static void mwifiex_interrupt_status(struct mwifiex_adapter *adapter)
+  */
+ static irqreturn_t mwifiex_pcie_interrupt(int irq, void *context)
+ {
+-	struct pci_dev *pdev = (struct pci_dev *)context;
++	struct mwifiex_msix_context *ctx = context;
++	struct pci_dev *pdev = ctx->dev;
+ 	struct pcie_service_card *card;
+ 	struct mwifiex_adapter *adapter;
+ 
+@@ -2106,7 +2117,11 @@ static irqreturn_t mwifiex_pcie_interrupt(int irq, void *context)
+ 	if (adapter->surprise_removed)
+ 		goto exit;
+ 
+-	mwifiex_interrupt_status(adapter);
++	if (card->msix_enable)
++		mwifiex_interrupt_status(adapter, ctx->msg_id);
++	else
++		mwifiex_interrupt_status(adapter, -1);
++
+ 	mwifiex_queue_main_work(adapter);
+ 
+ exit:
+@@ -2126,7 +2141,7 @@ exit:
+  * In case of Rx packets received, the packets are uploaded from card to
+  * host and processed accordingly.
+  */
+-static int mwifiex_process_int_status(struct mwifiex_adapter *adapter)
++static int mwifiex_process_pcie_int(struct mwifiex_adapter *adapter)
+ {
+ 	int ret;
+ 	u32 pcie_ireg = 0;
+@@ -2235,6 +2250,64 @@ static int mwifiex_process_int_status(struct mwifiex_adapter *adapter)
+ 	return 0;
+ }
+ 
++static int mwifiex_process_msix_int(struct mwifiex_adapter *adapter)
++{
++	int ret;
++	u32 pcie_ireg;
++	unsigned long flags;
++
++	spin_lock_irqsave(&adapter->int_lock, flags);
++	/* Clear out unused interrupts */
++	pcie_ireg = adapter->int_status;
++	adapter->int_status = 0;
++	spin_unlock_irqrestore(&adapter->int_lock, flags);
++
++	if (pcie_ireg & HOST_INTR_DNLD_DONE) {
++		pr_debug("info: TX DNLD Done\n");
++		ret = mwifiex_pcie_send_data_complete(adapter);
++		if (ret)
++			return ret;
++	}
++	if (pcie_ireg & HOST_INTR_UPLD_RDY) {
++		pr_debug("info: Rx DATA\n");
++		ret = mwifiex_pcie_process_recv_data(adapter);
++		if (ret)
++			return ret;
++	}
++	if (pcie_ireg & HOST_INTR_EVENT_RDY) {
++		pr_debug("info: Rx EVENT\n");
++		ret = mwifiex_pcie_process_event_ready(adapter);
++		if (ret)
++			return ret;
++	}
++
++	if (pcie_ireg & HOST_INTR_CMD_DONE) {
++		if (adapter->cmd_sent) {
++			pr_debug("info: CMD sent Interrupt\n");
++			adapter->cmd_sent = false;
++		}
++		/* Handle command response */
++		ret = mwifiex_pcie_process_cmd_complete(adapter);
++		if (ret)
++			return ret;
++	}
++
++	pr_debug("info: cmd_sent=%d data_sent=%d\n",
++		 adapter->cmd_sent, adapter->data_sent);
++
++	return 0;
++}
++
++static int mwifiex_process_int_status(struct mwifiex_adapter *adapter)
++{
++	struct pcie_service_card *card = adapter->card;
++
++	if (card->msix_enable)
++		return mwifiex_process_msix_int(adapter);
++	else
++		return mwifiex_process_pcie_int(adapter);
++}
++
+ /*
+  * This function downloads data from driver to card.
+  *
+@@ -2581,10 +2654,42 @@ static void mwifiex_pcie_cleanup(struct mwifiex_adapter *adapter)
+ 
+ static int mwifiex_pcie_request_irq(struct mwifiex_adapter *adapter)
+ {
+-	int ret;
++	int ret, i, j;
+ 	struct pcie_service_card *card = adapter->card;
+ 	struct pci_dev *pdev = card->dev;
+ 
++	if (card->pcie.reg->msix_support) {
++		for (i = 0; i < MWIFIEX_NUM_MSIX_VECTORS; i++)
++			card->msix_entries[i].entry = i;
++		ret = pci_enable_msix_exact(pdev, card->msix_entries,
++					    MWIFIEX_NUM_MSIX_VECTORS);
++		if (!ret) {
++			for (i = 0; i < MWIFIEX_NUM_MSIX_VECTORS; i++) {
++				card->msix_ctx[i].dev = pdev;
++				card->msix_ctx[i].msg_id = i;
++
++				ret = request_irq(card->msix_entries[i].vector,
++						  mwifiex_pcie_interrupt, 0,
++						  "MWIFIEX_PCIE_MSIX",
++						  &card->msix_ctx[i]);
++				if (ret)
++					break;
++			}
++
++			if (ret) {
++				pr_debug("request_irq fail: %d\n", ret);
++				for (j = 0; j < i; j++)
++					free_irq(card->msix_entries[j].vector,
++						 &card->msix_ctx[i]);
++				pci_disable_msix(pdev);
++			} else {
++				pr_debug("MSIx enabled!");
++				card->msix_enable = 1;
++				return 0;
++			}
++		}
++	}
++
+ 	if (pci_enable_msi(pdev) != 0)
+ 		pci_disable_msi(pdev);
+ 	else
+@@ -2592,8 +2697,10 @@ static int mwifiex_pcie_request_irq(struct mwifiex_adapter *adapter)
+ 
+ 	pr_debug("msi_enable = %d\n", card->msi_enable);
+ 
++	card->share_irq_ctx.dev = pdev;
++	card->share_irq_ctx.msg_id = -1;
+ 	ret = request_irq(pdev->irq, mwifiex_pcie_interrupt, IRQF_SHARED,
+-			  "MRVL_PCIE", pdev);
++			  "MRVL_PCIE", &card->share_irq_ctx);
+ 	if (ret) {
+ 		pr_err("request_irq failed: ret=%d\n", ret);
+ 		adapter->card = NULL;
+@@ -2639,10 +2746,27 @@ static void mwifiex_unregister_dev(struct mwifiex_adapter *adapter)
+ {
+ 	struct pcie_service_card *card = adapter->card;
+ 	const struct mwifiex_pcie_card_reg *reg;
++	struct pci_dev *pdev = card->dev;
++	int i;
+ 
+ 	if (card) {
+-		dev_dbg(adapter->dev, "%s(): calling free_irq()\n", __func__);
+-		free_irq(card->dev->irq, card->dev);
++		if (card->msix_enable) {
++			for (i = 0; i < MWIFIEX_NUM_MSIX_VECTORS; i++)
++				synchronize_irq(card->msix_entries[i].vector);
++
++			for (i = 0; i < MWIFIEX_NUM_MSIX_VECTORS; i++)
++				free_irq(card->msix_entries[i].vector,
++					 &card->msix_ctx[i]);
++
++			card->msix_enable = 0;
++			pci_disable_msix(pdev);
++	       } else {
++			pr_debug("%s(): calling free_irq()\n", __func__);
++		       free_irq(card->dev->irq, &card->share_irq_ctx);
++
++			if (card->msi_enable)
++				pci_disable_msi(pdev);
++	       }
+ 
+ 		reg = card->pcie.reg;
+ 		if (reg->sleep_cookie)
+diff --git a/drivers/net/wireless/mwifiex/pcie.h b/drivers/net/wireless/mwifiex/pcie.h
+index 78e3a0aa68ee..86880e80f3c7 100644
+--- a/drivers/net/wireless/mwifiex/pcie.h
++++ b/drivers/net/wireless/mwifiex/pcie.h
+@@ -133,6 +133,7 @@ struct mwifiex_pcie_card_reg {
+ 	u16 fw_dump_ctrl;
+ 	u16 fw_dump_start;
+ 	u16 fw_dump_end;
++	u8 msix_support;
+ };
+ 
+ static const struct mwifiex_pcie_card_reg mwifiex_reg_8766 = {
+@@ -164,6 +165,7 @@ static const struct mwifiex_pcie_card_reg mwifiex_reg_8766 = {
+ 	.ring_tx_start_ptr = 0,
+ 	.pfu_enabled = 0,
+ 	.sleep_cookie = 1,
++	.msix_support = 0,
+ };
+ 
+ static const struct mwifiex_pcie_card_reg mwifiex_reg_8897 = {
+@@ -197,7 +199,8 @@ static const struct mwifiex_pcie_card_reg mwifiex_reg_8897 = {
+ 	.sleep_cookie = 0,
+ 	.fw_dump_ctrl = 0xcf4,
+ 	.fw_dump_start = 0xcf8,
+-	.fw_dump_end = 0xcff
++	.fw_dump_end = 0xcff,
++	.msix_support = 0,
+ };
+ 
+ struct mwifiex_pcie_device {
+@@ -248,6 +251,13 @@ struct mwifiex_pfu_buf_desc {
+ 	u32 reserved;
+ } __packed;
+ 
++#define MWIFIEX_NUM_MSIX_VECTORS   4
++
++struct mwifiex_msix_context {
++	struct pci_dev *dev;
++	u16 msg_id;
++};
++
+ struct pcie_service_card {
+ 	struct pci_dev *dev;
+ 	struct mwifiex_adapter *adapter;
+@@ -285,6 +295,12 @@ struct pcie_service_card {
+ 	void __iomem *pci_mmap;
+ 	void __iomem *pci_mmap1;
+ 	int msi_enable;
++	int msix_enable;
++#ifdef CONFIG_PCI
++	struct msix_entry msix_entries[MWIFIEX_NUM_MSIX_VECTORS];
++#endif
++	struct mwifiex_msix_context msix_ctx[MWIFIEX_NUM_MSIX_VECTORS];
++	struct mwifiex_msix_context share_irq_ctx;
+ };
+ 
+ static inline int
+-- 
+2.11.0
+
