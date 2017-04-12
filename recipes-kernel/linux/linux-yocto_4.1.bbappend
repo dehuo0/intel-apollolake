@@ -18,4 +18,8 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0004-mwifiex-advertise-multichannel-support-to-cfg80211.patch \
 	    file://0005-mwifiex-Change-from-mlan-to-wlan-for-default-interfa.patch \
 	    file://0001-mwifiex-enable-pcie-MSIx-interrupt-mode-support.patch \
+	    file://0001-The-patches-for-Redpine-RS9113DB-drivers.patch \
 	   "
+
+KERNEL_MODULE_PROBECONF += "rsi_usb"
+module_conf_rsi_usb = "options rsi_usb dev_oper_mode=9"
