@@ -22,4 +22,4 @@ SRC_URI += "file://apollolake-standard.scc \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
-module_conf_rsi_usb = "options rsi_usb dev_oper_mode=9"
+module_conf_rsi_usb = "options rsi_usb dev_oper_mode=14"
