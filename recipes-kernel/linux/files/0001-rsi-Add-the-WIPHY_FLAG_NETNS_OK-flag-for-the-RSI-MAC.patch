@@ -1,0 +1,27 @@
+From ea694edbe87640b57f970600e8e5657ef3996e72 Mon Sep 17 00:00:00 2001
+From: Guojian Zhou <guojian.zhou@windriver.com>
+Date: Fri, 30 Jun 2017 09:19:39 +0000
+Subject: [PATCH] rsi: Add the WIPHY_FLAG_NETNS_OK flag for the RSI MAC80211
+ PHY
+
+Signed-off-by: Guojian Zhou <guojian.zhou@windriver.com>
+---
+ drivers/net/wireless/rsi/rsi_91x_mac80211.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/drivers/net/wireless/rsi/rsi_91x_mac80211.c b/drivers/net/wireless/rsi/rsi_91x_mac80211.c
+index 2f508fc..a0de1aa 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_mac80211.c
++++ b/drivers/net/wireless/rsi/rsi_91x_mac80211.c
+@@ -2800,6 +2800,8 @@ int rsi_mac80211_attach(struct rsi_common *common)
+ 	wiphy->wowlan = &rsi_wowlan_support;
+ #endif
+ 
++	wiphy->flags |= WIPHY_FLAG_NETNS_OK;
++
+ #ifdef CONFIG_RSI_P2P
+ 	/* Wi-Fi direct related parameters */
+ 	wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
+-- 
+2.7.4
+
