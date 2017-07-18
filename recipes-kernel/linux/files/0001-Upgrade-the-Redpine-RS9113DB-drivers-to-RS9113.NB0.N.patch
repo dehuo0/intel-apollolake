@@ -1,0 +1,1231 @@
+From 28725eaa6ad701a425bd3821ec1f766c414e46c2 Mon Sep 17 00:00:00 2001
+From: Guojian Zhou <guojian.zhou@windriver.com>
+Date: Tue, 18 Jul 2017 10:41:36 +0000
+Subject: [PATCH] Upgrade the Redpine RS9113DB drivers to
+ RS9113.NB0.NL.GNU.LNX.1.2 Version
+
+It comes from the RS9113.NB0.NL.GNU.LNX.1.2.tgz tarball.
+These patches will fix up the WIFI AP mode download speed too slow defect.
+
+Signed-off-by: Guojian Zhou <guojian.zhou@windriver.com>
+---
+ drivers/net/wireless/rsi/rsi_91x_coex.c     |   1 +
+ drivers/net/wireless/rsi/rsi_91x_core.c     |  10 +-
+ drivers/net/wireless/rsi/rsi_91x_hal.c      |   6 +-
+ drivers/net/wireless/rsi/rsi_91x_hci.c      |  19 ++-
+ drivers/net/wireless/rsi/rsi_91x_mac80211.c |  85 +++++++----
+ drivers/net/wireless/rsi/rsi_91x_sdio.c     | 221 +++++++++++++++++-----------
+ drivers/net/wireless/rsi/rsi_91x_sdio_ops.c |  71 +++++++--
+ drivers/net/wireless/rsi/rsi_91x_usb.c      |  59 +++++---
+ drivers/net/wireless/rsi/rsi_91x_usb_ops.c  |  34 ++---
+ drivers/net/wireless/rsi/rsi_common.h       |   3 +
+ drivers/net/wireless/rsi/rsi_main.h         |  26 ++--
+ drivers/net/wireless/rsi/rsi_sdio.h         |   9 ++
+ drivers/net/wireless/rsi/rsi_usb.h          |   6 +-
+ 13 files changed, 348 insertions(+), 202 deletions(-)
+
+diff --git a/drivers/net/wireless/rsi/rsi_91x_coex.c b/drivers/net/wireless/rsi/rsi_91x_coex.c
+index ab0a7c6..9f3a023 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_coex.c
++++ b/drivers/net/wireless/rsi/rsi_91x_coex.c
+@@ -105,6 +105,7 @@ int rsi_coex_recv_pkt(struct rsi_common *common, u8 *msg)
+ 	u16 msg_type = msg[2];
+ 
+ 	if (msg_type == COMMON_CARD_READY_IND) {
++		common->hibernate_resume = false;
+ 		rsi_dbg(INFO_ZONE, "COMMON CARD READY RECEIVED\n");
+ 		rsi_handle_card_ready(common, msg);
+ 	} else if (msg_type == SLEEP_NOTIFY_IND) {
+diff --git a/drivers/net/wireless/rsi/rsi_91x_core.c b/drivers/net/wireless/rsi/rsi_91x_core.c
+index 8524219..2621e2c 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_core.c
++++ b/drivers/net/wireless/rsi/rsi_91x_core.c
+@@ -321,16 +321,16 @@ void rsi_core_qos_processor(struct rsi_common *common)
+ 		}
+ 
+ 		skb = rsi_core_dequeue_pkt(common, q_num);
+-		if ((adapter->peer_notify) &&
+-		    (skb->data[2] == PEER_NOTIFY)) {
+-			adapter->peer_notify = false;
+-			rsi_dbg(INFO_ZONE, "%s RESET PEER_NOTIFY\n", __func__);
+-		}
+ 		if (!skb) {
+ 			rsi_dbg(ERR_ZONE, "skb null\n");
+ 			mutex_unlock(&common->tx_lock);
+ 			break;
+ 		}
++		if ((adapter->peer_notify) &&
++		    (skb->data[2] == PEER_NOTIFY)) {
++			adapter->peer_notify = false;
++			rsi_dbg(INFO_ZONE, "%s RESET PEER_NOTIFY\n", __func__);
++		}
+ #ifdef CONFIG_RSI_COEX
+ 		if (q_num == MGMT_BEACON_Q) {
+ 			status = rsi_send_pkt(common, skb);
+diff --git a/drivers/net/wireless/rsi/rsi_91x_hal.c b/drivers/net/wireless/rsi/rsi_91x_hal.c
+index cfc507e..20b87e3 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_hal.c
++++ b/drivers/net/wireless/rsi/rsi_91x_hal.c
+@@ -247,7 +247,7 @@ int rsi_prepare_mgmt_desc(struct rsi_common *common,struct sk_buff *skb)
+ 	struct rsi_hw *adapter = common->priv;
+ 	struct ieee80211_hdr *wh = NULL;
+ 	struct ieee80211_tx_info *info;
+-	struct ieee80211_conf *conf = &adapter->hw->conf;
++	struct ieee80211_conf *conf;// = &adapter->hw->conf;
+ 	struct ieee80211_vif *vif = NULL;
+ 	struct skb_info *tx_params;
+ 	int status = -EINVAL;
+@@ -257,6 +257,9 @@ int rsi_prepare_mgmt_desc(struct rsi_common *common,struct sk_buff *skb)
+ 	u8 vap_id = 0;
+ 	u32 dword_align_bytes = 0;
+ 
++	if (!adapter->hw)
++		goto err;
++	conf = &adapter->hw->conf;
+ 	info = IEEE80211_SKB_CB(skb);
+ 	tx_params = (struct skb_info *)info->driver_data;
+ 
+@@ -1272,6 +1275,7 @@ int rsi_hal_device_init(struct rsi_hw *adapter)
+ 		return -EINVAL;
+ 	}
+ 	adapter->common_hal_fsm = COMMAN_HAL_WAIT_FOR_CARD_READY;
++	common->fsm_state = FSM_CARD_NOT_READY;
+ 
+ #if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
+ 	adapter->priv->bt_fsm_state = BT_DEVICE_NOT_READY;
+diff --git a/drivers/net/wireless/rsi/rsi_91x_hci.c b/drivers/net/wireless/rsi/rsi_91x_hci.c
+index f30a77e..1c8dd41 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_hci.c
++++ b/drivers/net/wireless/rsi/rsi_91x_hci.c
+@@ -227,6 +227,7 @@ int rsi_send_rfmode_frame(struct rsi_common *common)
+ {
+ 	struct sk_buff *skb;
+ 	struct rsi_bt_rfmode_frame *cmd_frame;
++	int status;
+ 
+ 	rsi_dbg(MGMT_TX_ZONE, "%s: Sending BT RF mode frame\n", __func__);
+ 
+@@ -246,7 +247,11 @@ int rsi_send_rfmode_frame(struct rsi_common *common)
+ 	skb_put(skb, sizeof(struct rsi_bt_rfmode_frame));
+ 
+ //	return rsi_coex_send_pkt(common, skb, RSI_BT_Q);
+-	return common->priv->host_intf_ops->write_pkt(common->priv, skb->data, skb->len);
++	status = common->priv->host_intf_ops->write_pkt(common->priv,
++							skb->data,
++							skb->len);
++	dev_kfree_skb(skb);
++	return status;
+ }
+ EXPORT_SYMBOL_GPL(rsi_send_rfmode_frame);
+ 
+@@ -254,6 +259,7 @@ int rsi_deregister_bt(struct rsi_common *common)
+ {
+ 	struct sk_buff *skb;
+ 	struct rsi_bt_cmd_frame *cmd_frame;
++	int status;
+ 
+ 	rsi_dbg(MGMT_TX_ZONE, "%s: Sending BT register frame\n", __func__);
+ 
+@@ -271,7 +277,11 @@ int rsi_deregister_bt(struct rsi_common *common)
+ 	skb_put(skb, sizeof(struct rsi_bt_cmd_frame));
+ 
+ 	//return rsi_coex_send_pkt(common, skb, RSI_BT_Q);
+-	return common->priv->host_intf_ops->write_pkt(common->priv, skb->data, skb->len);
++	status = common->priv->host_intf_ops->write_pkt(common->priv,
++							skb->data,
++							skb->len);
++	dev_kfree_skb(skb);
++	return status;
+ }
+ EXPORT_SYMBOL_GPL(rsi_deregister_bt);
+ 
+@@ -304,7 +314,7 @@ int rsi_hci_recv_pkt(struct rsi_common *common, u8 *pkt)
+ 
+ 		return 0;
+ 	}
+- 
++
+ 	if (common->bt_fsm_state != BT_DEVICE_READY) {
+ 		rsi_dbg(INFO_ZONE, "BT Device not ready\n");
+ 		return 0;
+@@ -578,9 +588,6 @@ void rsi_hci_detach(struct rsi_common *common)
+ 	if (!h_adapter)
+ 		return;
+ 
+-	if (common->suspend_in_prog)
+-		rsi_deregister_bt(common);
+-
+ 	hdev = h_adapter->hdev;
+ 	if (hdev) {
+                 //hci_dev_hold(hdev);
+diff --git a/drivers/net/wireless/rsi/rsi_91x_mac80211.c b/drivers/net/wireless/rsi/rsi_91x_mac80211.c
+index a0de1aa..36e39a4 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_mac80211.c
++++ b/drivers/net/wireless/rsi/rsi_91x_mac80211.c
+@@ -456,6 +456,9 @@ static void rsi_mac80211_hw_scan_cancel(struct ieee80211_hw *hw,
+ void rsi_mac80211_detach(struct rsi_hw *adapter)
+ {
+ 	struct ieee80211_hw *hw = adapter->hw;
++#ifdef CONFIG_HW_SCAN_OFFLOAD
++	struct rsi_common *common = adapter->priv;
++#endif
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0))
+ 	enum nl80211_band band;
+ #else
+@@ -464,11 +467,15 @@ void rsi_mac80211_detach(struct rsi_hw *adapter)
+ 
+ 	rsi_dbg(INFO_ZONE, "Detach mac80211...\n");
+ 
++#ifdef CONFIG_HW_SCAN_OFFLOAD
++	flush_workqueue(common->scan_workqueue);
++#endif
+ 	if (hw) {
+ 		ieee80211_stop_queues(hw);
+ 		ieee80211_unregister_hw(hw);
+ 		ieee80211_free_hw(hw);
+ 		adapter->hw = NULL;
++		adapter->sc_nvifs = 0;
+ 	}
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0))
+@@ -606,14 +613,9 @@ static void rsi_mac80211_stop(struct ieee80211_hw *hw)
+ {
+ 	struct rsi_hw *adapter = hw->priv;
+ 	struct rsi_common *common = adapter->priv;
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0))
+-	struct cfg80211_scan_info info;
+-#endif
++	
+ 	rsi_dbg(ERR_ZONE, "===> Interface DOWN <===\n");
+ 
+-	if (common->fsm_state != FSM_MAC_INIT_DONE)
+-		return;
+-
+ 	mutex_lock(&common->mutex);
+ 	
+ 	common->iface_down = true;
+@@ -625,7 +627,8 @@ static void rsi_mac80211_stop(struct ieee80211_hw *hw)
+ 	wiphy_rfkill_stop_polling(hw->wiphy);
+ 
+ 	/* Block all rx frames */
+-	rsi_send_rx_filter_frame(common, 0xffff);
++	if (common->fsm_state == FSM_MAC_INIT_DONE)
++		rsi_send_rx_filter_frame(common, 0xffff);
+ 	
+ 	mutex_unlock(&common->mutex);
+ }
+@@ -1489,6 +1492,7 @@ static int rsi_mac80211_set_key(struct ieee80211_hw *hw,
+  *
+  * Return: status: 0 on success, negative error code on failure.
+  */
++#ifndef CONFIG_CARACALLA_BOARD
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0))
+ static int rsi_mac80211_ampdu_action(struct ieee80211_hw *hw,
+ 				     struct ieee80211_vif *vif,
+@@ -1511,6 +1515,12 @@ static int rsi_mac80211_ampdu_action(struct ieee80211_hw *hw,
+ 				     struct ieee80211_vif *vif,
+ 				     struct ieee80211_ampdu_params *params)
+ #endif
++#else
++static int rsi_mac80211_ampdu_action(struct ieee80211_hw *hw,
++				     struct ieee80211_vif *vif,
++				     struct ieee80211_ampdu_params *params)
++#endif
++	
+ {
+ 	int status = 1;
+ 	struct rsi_hw *adapter = hw->priv;
+@@ -1520,7 +1530,7 @@ static int rsi_mac80211_ampdu_action(struct ieee80211_hw *hw,
+ 	u8 ii = 0;
+ 	u8 sta_id = 0;
+ 
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 6, 0))
++#if ((LINUX_VERSION_CODE >= KERNEL_VERSION(4, 6, 0)) || defined(CONFIG_CARACALLA_BOARD))
+ 	u16 tid = params->tid;
+ 	u8 buf_size = params->buf_size;
+ 	enum ieee80211_ampdu_mlme_action action = params->action;
+@@ -1534,7 +1544,7 @@ static int rsi_mac80211_ampdu_action(struct ieee80211_hw *hw,
+ 
+ 	mutex_lock(&common->mutex);
+ 
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0))
++#if ((LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)) && !(defined(CONFIG_CARACALLA_BOARD)))
+ 	if (ssn != NULL)
+ 		seq_no = *ssn;
+ #else
+@@ -2026,7 +2036,7 @@ static void rsi_mac80211_sw_scan_start(struct ieee80211_hw *hw,
+ 	struct ieee80211_bss_conf *bss = &adapter->vifs[0]->bss_conf;
+ 
+ 	if (common->fsm_state != FSM_MAC_INIT_DONE)
+-		return -ENODEV;
++		return;
+ 
+ 	if (common->p2p_enabled)
+ 		return;
+@@ -2367,41 +2377,31 @@ static u16 rsi_wow_map_triggers(struct rsi_common *common,
+ }
+ #endif
+ 
+-#ifdef CONFIG_PM
+-int rsi_mac80211_suspend(struct ieee80211_hw *hw,
+-			 struct cfg80211_wowlan *wowlan)
+-{
+ #ifdef CONFIG_RSI_WOW
+-	struct rsi_hw *adapter = hw->priv;
++int rsi_config_wowlan(struct rsi_hw *adapter, struct cfg80211_wowlan *wowlan)
++{
+ 	struct rsi_common *common = adapter->priv;
+ 	u16 triggers = 0;
+        	u16 rx_filter_word = 0;
+ 	struct ieee80211_bss_conf *bss = &adapter->vifs[0]->bss_conf;
+-#endif
+-	int ret = 0;
+ 
+-	rsi_dbg(INFO_ZONE, "***** mac80211 suspend called ******\n");
++	rsi_dbg(INFO_ZONE, "Config WoWLAN to device\n");
+ 
+-#ifdef CONFIG_RSI_WOW
+ 	if (WARN_ON(!wowlan)) {
+-		rsi_dbg(ERR_ZONE,
+-			"##### WoW triggers not enabled #####\n");
+-		ret = -EINVAL;
+-		goto fail_wow;
++		rsi_dbg(ERR_ZONE, "WoW triggers not enabled\n");
++		return -EINVAL;
+ 	}
+ 
+ 	triggers = rsi_wow_map_triggers(common, wowlan);
+ 	if (!triggers) {
+ 		rsi_dbg(ERR_ZONE, "%s:No valid WoW triggers\n",__func__);
+-		ret = -EINVAL;
+-		goto fail_wow;
++		return -EINVAL;
+ 	}
+ 	if (!bss->assoc) {
+ 		rsi_dbg(ERR_ZONE,
+ 			"Cannot configure WoWLAN (Station not connected)\n");
+ 		common->wow_flags |= RSI_WOW_NO_CONNECTION;
+-		ret = 0;
+-		goto fail_wow;
++		return 0;
+ 	}
+ 	rsi_dbg(INFO_ZONE, "TRIGGERS %x\n", triggers);
+ 	rsi_send_wowlan_request(common, triggers, 1);
+@@ -2415,9 +2415,29 @@ int rsi_mac80211_suspend(struct ieee80211_hw *hw,
+ 	rsi_send_rx_filter_frame(common, rx_filter_word);
+ 
+         common->wow_flags |= RSI_WOW_ENABLED;
+-fail_wow:
++        
++	return 0;
++}
++EXPORT_SYMBOL_GPL(rsi_config_wowlan);
++#endif
++
++#ifdef CONFIG_PM
++static int rsi_mac80211_suspend(struct ieee80211_hw *hw,
++				struct cfg80211_wowlan *wowlan)
++{
++#ifdef CONFIG_RSI_WOW
++	struct rsi_hw *adapter = hw->priv;
++	struct rsi_common *common = adapter->priv;
++
++	mutex_lock(&common->mutex);
++	if (rsi_config_wowlan(adapter, wowlan)) {
++		rsi_dbg(ERR_ZONE, "Failed to configure WoWLAN\n");
++		mutex_unlock(&common->mutex);
++		return 1;
++	}
++	mutex_unlock(&common->mutex);
+ #endif
+-        return (ret ? 1 : 0);
++	return 0;
+ }
+ 
+ static int rsi_mac80211_resume(struct ieee80211_hw *hw)
+@@ -2426,9 +2446,9 @@ static int rsi_mac80211_resume(struct ieee80211_hw *hw)
+ 	struct rsi_common *common = adapter->priv;
+ #ifdef CONFIG_RSI_WOW
+ 	u16 rx_filter_word = 0;
+-#endif
+         
+ 	adapter->priv->wow_flags = 0;
++#endif
+ 	
+ 	rsi_dbg(INFO_ZONE, "%s: mac80211 resume\n", __func__);
+ 
+@@ -2436,6 +2456,7 @@ static int rsi_mac80211_resume(struct ieee80211_hw *hw)
+ 		return 0;
+ 
+ #ifdef CONFIG_RSI_WOW
++	mutex_lock(&common->mutex);
+ 	rsi_send_wowlan_request(common, 0, 0);
+ 
+ 	rx_filter_word = (ALLOW_DATA_ASSOC_PEER |
+@@ -2443,7 +2464,9 @@ static int rsi_mac80211_resume(struct ieee80211_hw *hw)
+ 			  ALLOW_MGMT_ASSOC_PEER |
+ 			  0);
+ 	rsi_send_rx_filter_frame(common, rx_filter_word);
++	mutex_unlock(&common->mutex);
+ #endif
++
+ 	return 0;
+ }
+ #endif
+@@ -2741,7 +2764,7 @@ int rsi_mac80211_attach(struct rsi_common *common)
+ 	hw->uapsd_queues = IEEE80211_MARKALL_UAPSD_QUEUES;
+ 	hw->uapsd_max_sp_len = IEEE80211_WMM_IE_STA_QOSINFO_SP_ALL;
+ 	hw->max_tx_aggregation_subframes = 8;
+-//	hw->max_rx_aggregation_subframes = 8;
++	hw->max_rx_aggregation_subframes = 8;
+ 
+ 	rsi_register_rates_channels(adapter, NL80211_BAND_2GHZ);
+ 	wiphy->bands[NL80211_BAND_2GHZ] =
+diff --git a/drivers/net/wireless/rsi/rsi_91x_sdio.c b/drivers/net/wireless/rsi/rsi_91x_sdio.c
+index 16fc928..1753017 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_sdio.c
++++ b/drivers/net/wireless/rsi/rsi_91x_sdio.c
+@@ -37,12 +37,12 @@
+ /* Default operating mode is Wi-Fi alone */
+ #ifdef CONFIG_CARACALLA_BOARD
+ #if defined (CONFIG_RSI_COEX) || defined(CONFIG_RSI_BT_ALONE)
+-u16 dev_oper_mode = DEV_OPMODE_STA_BT_DUAL;
++static u16 dev_oper_mode = DEV_OPMODE_STA_BT_DUAL;
+ #else
+-u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
++static u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
+ #endif
+ #else
+-u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
++static u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
+ #endif
+ module_param(dev_oper_mode, ushort, S_IRUGO);
+ MODULE_PARM_DESC(dev_oper_mode,
+@@ -164,11 +164,6 @@ static int rsi_issue_sdiocommand(struct sdio_func *func,
+ 	return err;
+ }
+ 
+-static void rsi_dummy_isr(struct sdio_func *function)
+-{
+-	return;
+-}
+-
+ /**
+  * rsi_handle_interrupt() - This function is called upon the occurrence
+  *			    of an interrupt.
+@@ -182,6 +177,8 @@ static void rsi_handle_interrupt(struct sdio_func *function)
+ 	struct rsi_91x_sdiodev *dev =
+ 		(struct rsi_91x_sdiodev *)adapter->rsi_dev;
+ 
++	if (adapter->priv->fsm_state == FSM_FW_NOT_LOADED)
++		return;
+ 	dev->sdio_irq_task = current;
+ 	rsi_interrupt_handler(adapter);
+ 	dev->sdio_irq_task = NULL;
+@@ -1066,6 +1063,8 @@ static int rsi_probe(struct sdio_func *pfunction,
+ 		     const struct sdio_device_id *id)
+ {
+ 	struct rsi_hw *adapter;
++	struct rsi_91x_sdiodev *sdev;
++	int status;
+ 
+ 	rsi_dbg(INIT_ZONE, "%s: Init function called\n", __func__);
+ 
+@@ -1084,48 +1083,54 @@ static int rsi_probe(struct sdio_func *pfunction,
+ 			__func__);
+ 		goto fail;
+ 	}
++
++	/* Initialize receive path */
++	sdev = adapter->rsi_dev;
++	rsi_init_event(&sdev->rx_thread.event);
++	status = rsi_create_kthread(adapter->priv, &sdev->rx_thread,
++				    rsi_sdio_rx_thread, "SDIO-RX-Thread");
++	if (status) {
++		rsi_dbg(ERR_ZONE, "%s: Unable to init rx thrd\n", __func__);
++		goto fail;
++	}
++	skb_queue_head_init(&sdev->rx_q.head);
++	sdev->rx_q.num_rx_pkts = 0;
++
+ #ifdef CONFIG_SDIO_INTR_POLL
+ 	init_sdio_intr_status_poll_thread(adapter->priv);
+ #endif
+ 	sdio_claim_host(pfunction);
+-//	if (sdio_claim_irq(pfunction, rsi_handle_interrupt)) {
+-	if (sdio_claim_irq(pfunction, rsi_dummy_isr)) {
++	if (sdio_claim_irq(pfunction, rsi_handle_interrupt)) {
+ 		rsi_dbg(ERR_ZONE, "%s: Failed to request IRQ\n", __func__);
+ 		sdio_release_host(pfunction);
+-		goto fail;
++		goto fail1;
+ 	}
+ 	sdio_release_host(pfunction);
+ 	rsi_dbg(INIT_ZONE, "%s: Registered Interrupt handler\n", __func__);
+ 
+ 	if (rsi_hal_device_init(adapter)) {
+ 		rsi_dbg(ERR_ZONE, "%s: Failed in device init\n", __func__);
+-		sdio_claim_host(pfunction);
+-		sdio_release_irq(pfunction);
+-		sdio_disable_func(pfunction);
+-		sdio_release_host(pfunction);
+-		goto fail;
++		goto fail1;
+ 	}
+ 	rsi_dbg(INFO_ZONE, "===> RSI Device Init Done <===\n");
+ 
+ 	if (rsi_sdio_master_access_msword(adapter, MISC_CFG_BASE_ADDR)) {
+ 		rsi_dbg(ERR_ZONE, "%s: Unable to set ms word reg\n", __func__);
+-		return -EIO;
++		goto fail2;
+ 	}
+ 	rsi_dbg(INIT_ZONE, "%s: Setting ms word to 0x41050000\n", __func__);
+ 
+-	sdio_claim_host(pfunction);
+-	sdio_release_irq(pfunction);
+-	mdelay(10);
+-	if (sdio_claim_irq(pfunction, rsi_handle_interrupt)) {
+-		rsi_dbg(ERR_ZONE, "%s: Failed to request IRQ\n", __func__);
+-		sdio_release_host(pfunction);
+-		goto fail;
+-	}
+-	sdio_release_host(pfunction);
+ 	adapter->priv->hibernate_resume = false;
+ 
+ 	return 0;
+ 
++fail2:
++	sdio_claim_host(pfunction);
++	sdio_release_irq(pfunction);
++	sdio_disable_func(pfunction);
++	sdio_release_host(pfunction);
++fail1:
++	rsi_kill_thread(&sdev->rx_thread);
+ fail:
+ #ifdef CONFIG_SDIO_INTR_POLL
+ 	rsi_kill_thread(&adapter->priv->sdio_intr_poll_thread);
+@@ -1154,6 +1159,8 @@ static void rsi_disconnect(struct sdio_func *pfunction)
+ #ifdef CONFIG_SDIO_INTR_POLL
+ 	rsi_kill_thread(&adapter->priv->sdio_intr_poll_thread);
+ #endif
++	rsi_kill_thread(&dev->rx_thread);
++
+ 	sdio_claim_host(pfunction);
+ 	sdio_release_irq(pfunction);
+ 	sdio_release_host(pfunction);
+@@ -1164,19 +1171,18 @@ static void rsi_disconnect(struct sdio_func *pfunction)
+ 	rsi_hci_detach(adapter->priv);
+ #endif
+ 
+-	if (!adapter->priv->hibernate_resume) {
+-		/* Reset Chip */
+-		rsi_reset_chip(adapter);
++	/* Reset Chip */
++	rsi_reset_chip(adapter);
+ 
+-		/* Resetting to take care of the case, where-in driver
+-		 * is re-loaded */
+-		sdio_claim_host(pfunction);
+-		rsi_reset_card(pfunction);
+-		sdio_disable_func(pfunction);
+-		sdio_release_host(pfunction);
+-	}
++	/* Resetting to take care of the case, where-in driver
++	 * is re-loaded */
++	sdio_claim_host(pfunction);
++	rsi_reset_card(pfunction);
++	sdio_disable_func(pfunction);
++	sdio_release_host(pfunction);
+ 	dev->write_fail = 2;
+ 	rsi_91x_deinit(adapter);
++
+ 	rsi_dbg(ERR_ZONE, "##### RSI SDIO device disconnected #####\n");
+ }
+ 
+@@ -1308,20 +1314,11 @@ static int rsi_suspend(struct device *dev)
+ 
+ 	common->suspend_in_prog = true;
+ #ifdef CONFIG_RSI_WOW
+-	if (common->wow_flags & RSI_WOW_ENABLED) {
+-		if (common->wow_flags & RSI_WOW_NO_CONNECTION)
+-			rsi_dbg(ERR_ZONE,
+-				"##### Device can not wake up through WLAN\n");
++	if ((common->wow_flags & RSI_WOW_ENABLED) &&
++	    (common->wow_flags & RSI_WOW_NO_CONNECTION))
++		rsi_dbg(ERR_ZONE,
++			"##### Device can not wake up through WLAN\n");
+ 
+-#if 0
+-#if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
+-		if ((common->coex_mode == 2) || (common->coex_mode == 4)) {
+-			/* Deregister BT protocol */
+-			rsi_hci_detach(common);
+-		}
+-#endif
+-#endif
+-	}
+ #endif
+ 
+ 	ret = rsi_sdio_disable_interrupts(pfunction);
+@@ -1335,7 +1332,7 @@ static int rsi_suspend(struct device *dev)
+ 			"Setting power management caps failed\n");
+ 
+ 	common->fsm_state = FSM_CARD_NOT_READY;
+-	rsi_dbg(INFO_ZONE, "***** SDIO BUS SUSPEND DONE ******\n");
++	rsi_dbg(INFO_ZONE, "***** RSI module suspended ******\n");
+ 
+ 	return 0;
+ }
+@@ -1347,27 +1344,15 @@ int rsi_resume(struct device *dev)
+ 	struct rsi_hw *adapter = sdio_get_drvdata(pfunction);
+ 	struct rsi_common *common = adapter->priv;
+         
+-	rsi_dbg(INFO_ZONE, "***** BUS RESUME ******\n");
++	rsi_dbg(INFO_ZONE, "SDIO Bus resume =====>\n");
+ 
+ 	common->suspend_in_prog = false;
+ 	common->fsm_state = FSM_MAC_INIT_DONE;
+ 
+ 	ret = rsi_sdio_enable_interrupts(pfunction);
+ 
+-#if 0
+-#ifdef CONFIG_RSI_WOW
+-#if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
+-	if ((common->wow_flags & RSI_WOW_ENABLED) &&
+-	    ((common->coex_mode == 2) || (common->coex_mode == 4))) {
+-		/* Register BT protocol */
+-		rsi_hci_attach(common);
+-	}
+-#endif
+-        adapter->priv->wow_flags = 0;
+-#endif
+-#endif
+-
+ 	rsi_dbg(INFO_ZONE, "***** RSI module resumed *****\n");
++
+ 	return 0;
+ }
+ 
+@@ -1376,9 +1361,8 @@ static int rsi_freeze(struct device *dev)
+ 	int ret = 0;
+ 	struct sdio_func *pfunction = dev_to_sdio_func(dev);
+ 	struct rsi_hw *adapter = sdio_get_drvdata(pfunction);
+-	struct rsi_common *common = adapter->priv;
+-	struct rsi_91x_sdiodev *sdev =
+-		(struct rsi_91x_sdiodev *)adapter->rsi_dev;
++	struct rsi_common *common;
++	struct rsi_91x_sdiodev *sdev;
+ 
+ 	rsi_dbg(INFO_ZONE, "SDIO Bus freeze ===>\n");
+ 
+@@ -1386,23 +1370,18 @@ static int rsi_freeze(struct device *dev)
+ 		rsi_dbg(ERR_ZONE, "Device is not ready\n");
+ 		return -ENODEV;
+ 	}
++	common = adapter->priv;
++	sdev = (struct rsi_91x_sdiodev *)adapter->rsi_dev;
+ 
+ 	common->suspend_in_prog = true;
+ #ifdef CONFIG_RSI_WOW
+-	if (common->wow_flags & RSI_WOW_ENABLED) {
+-		if (common->wow_flags & RSI_WOW_NO_CONNECTION)
+-			rsi_dbg(ERR_ZONE,
+-				"##### Device can not wake up through WLAN\n");
+-
+-#if 0
+-#if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
+-		if ((common->coex_mode == 2) || (common->coex_mode == 4)) {
+-			/* Deregister BT protocol */
+-			rsi_deregister_bt(common);
+-		}
+-#endif
++	if ((common->wow_flags & RSI_WOW_ENABLED) &&
++	    (common->wow_flags & RSI_WOW_NO_CONNECTION))
++		rsi_dbg(ERR_ZONE,
++			"##### Device can not wake up through WLAN\n");
+ #endif
+-	}
++#if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
++	rsi_hci_detach(common);
+ #endif
+ 
+ 	ret = rsi_sdio_disable_interrupts(pfunction);
+@@ -1414,6 +1393,8 @@ static int rsi_freeze(struct device *dev)
+ 	if (ret)
+ 		rsi_dbg(INFO_ZONE, "Setting power management caps failed\n");
+ 	
++	rsi_dbg(INFO_ZONE, "***** RSI module freezed *****\n");
++
+ 	return 0;
+ }
+ 
+@@ -1422,9 +1403,8 @@ int rsi_thaw(struct device *dev)
+ 	struct sdio_func *pfunction = dev_to_sdio_func(dev);
+ 	struct rsi_hw *adapter = sdio_get_drvdata(pfunction);
+         
+-	rsi_dbg(ERR_ZONE, "***** BUS THAW ******\n");
++	rsi_dbg(ERR_ZONE, "SDIO Bus thaw =====>\n");
+ 
+-//	adapter->priv->suspend_in_prog = false;
+ 	adapter->priv->hibernate_resume = true;
+ 	adapter->priv->fsm_state = FSM_CARD_NOT_READY;
+ 	adapter->priv->bt_fsm_state = BT_DEVICE_NOT_READY;
+@@ -1432,7 +1412,8 @@ int rsi_thaw(struct device *dev)
+ 
+ 	rsi_sdio_enable_interrupts(pfunction);
+ 
+-	rsi_dbg(INFO_ZONE, "RSI module resumed\n");
++	rsi_dbg(INFO_ZONE, "***** RSI module thaw done *****\n");
++
+ 	return 0;
+ }
+ 
+@@ -1443,7 +1424,67 @@ static int rsi_poweroff(struct device *dev)
+ 
+ static void rsi_shutdown(struct device *dev)
+ {
+-	rsi_freeze(dev);
++	struct sdio_func *pfunction = dev_to_sdio_func(dev);
++	struct rsi_hw *adapter = sdio_get_drvdata(pfunction);
++	struct rsi_91x_sdiodev *sdev =
++		(struct rsi_91x_sdiodev *)adapter->rsi_dev;
++#ifdef CONFIG_RSI_WOW
++	struct ieee80211_hw *hw = adapter->hw;
++	struct cfg80211_wowlan *wowlan = hw->wiphy->wowlan_config;
++#endif
++
++	rsi_dbg(ERR_ZONE, "SDIO Bus shutdown =====>\n");
++
++	adapter->priv->suspend_in_prog = true;
++
++#ifdef CONFIG_RSI_WOW
++	if (rsi_config_wowlan(adapter, wowlan))
++		rsi_dbg(ERR_ZONE, "Failed to configure WoWLAN\n");
++#endif
++
++#if defined(CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)
++	rsi_hci_detach(adapter->priv);
++#endif
++
++	rsi_sdio_disable_interrupts(sdev->pfunction);
++
++	if (sdev->write_fail)
++		rsi_dbg(INFO_ZONE, "###### Device is not ready #######\n");
++	
++	if (rsi_set_sdio_pm_caps(adapter))
++		rsi_dbg(INFO_ZONE, "Setting power management caps failed\n");
++
++	rsi_dbg(INFO_ZONE, "***** RSI module shut down *****\n");
++}
++
++static int rsi_sdio_reinit_device(struct rsi_hw *adapter)
++{
++	struct rsi_91x_sdiodev *sdev = adapter->rsi_dev;
++	struct sdio_func *pfunction = sdev->pfunction;
++	int ii;
++
++	/* Flush soft queues */
++	for (ii = 0; ii < NUM_SOFT_QUEUES; ii++)
++		skb_queue_purge(&adapter->priv->tx_queue[ii]);
++
++	/* Detach MAC */
++	rsi_mac80211_detach(adapter);
++	
++	/* Initialize device again */
++	sdio_claim_host(pfunction);
++
++	sdio_release_irq(pfunction);
++	rsi_reset_card(pfunction);
++
++	sdio_enable_func(pfunction);
++	rsi_setupcard(adapter);
++	rsi_init_sdio_slave_regs(adapter);
++	sdio_claim_irq(pfunction, rsi_handle_interrupt);
++	rsi_hal_device_init(adapter);
++
++	sdio_release_host(pfunction);
++
++	return 0;
+ }
+ 
+ int rsi_restore(struct device *dev)
+@@ -1451,12 +1492,22 @@ int rsi_restore(struct device *dev)
+ 	struct sdio_func *pfunction = dev_to_sdio_func(dev);
+ 	struct rsi_hw *adapter = sdio_get_drvdata(pfunction);
+ 
++	rsi_dbg(INFO_ZONE, "SDIO Bus restore ======>\n");
++
+ 	adapter->priv->suspend_in_prog = false;
+ 	adapter->priv->hibernate_resume = true;
+-	adapter->priv->fsm_state = FSM_CARD_NOT_READY;
++	adapter->priv->fsm_state = FSM_FW_NOT_LOADED;
+ 	adapter->priv->bt_fsm_state = BT_DEVICE_NOT_READY;
+ 	adapter->priv->iface_down = true;
+ 
++	/* Initialize device again */
++	rsi_sdio_reinit_device(adapter);
++
++#ifdef CONFIG_RSI_WOW
++	adapter->priv->wow_flags = 0;
++#endif
++	adapter->priv->iface_down = false;
++
+ 	rsi_dbg(INFO_ZONE, "RSI module restored\n");
+ 
+ 	return 0;
+diff --git a/drivers/net/wireless/rsi/rsi_91x_sdio_ops.c b/drivers/net/wireless/rsi/rsi_91x_sdio_ops.c
+index bce2993..aef8fde 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_sdio_ops.c
++++ b/drivers/net/wireless/rsi/rsi_91x_sdio_ops.c
+@@ -74,6 +74,50 @@ int rsi_sdio_master_access_msword(struct rsi_hw *adapter,
+ 	return status;
+ }
+ 
++void rsi_sdio_rx_thread(struct rsi_common *common)
++{
++	struct rsi_hw *adapter = common->priv;
++	struct rsi_91x_sdiodev *sdev = adapter->rsi_dev;
++	struct sk_buff *skb;
++	int status;
++	bool done = false;
++
++	do {
++		rsi_wait_event(&sdev->rx_thread.event, EVENT_WAIT_FOREVER);
++
++		if (atomic_read(&sdev->rx_thread.thread_done))
++			break;
++
++		while (true) {
++			skb = skb_dequeue(&sdev->rx_q.head);
++			if (!skb)
++				break;
++			status = rsi_read_pkt(common, skb->data, skb->len);
++			if (status) {
++				rsi_dbg(ERR_ZONE, "Failed to read the packet\n");
++				dev_kfree_skb(skb);
++				return;
++			}
++			dev_kfree_skb(skb);
++			if (sdev->rx_q.num_rx_pkts > 0)
++				sdev->rx_q.num_rx_pkts--;
++			
++			if (atomic_read(&sdev->rx_thread.thread_done)) {
++				done = true;
++				break;
++			}
++		}
++		rsi_reset_event(&sdev->rx_thread.event);
++		if (done)
++			break;
++	} while (1);
++
++	rsi_dbg(INFO_ZONE, "%s: Terminated SDIO RX thread\n", __func__);
++	skb_queue_purge(&sdev->rx_q.head);
++	atomic_inc(&sdev->rx_thread.thread_done);
++	complete_and_exit(&sdev->rx_thread.completion, 0);
++}
++
+ /**
+  * rsi_process_pkt() - This Function reads rx_blocks register and figures out
+  *		       the size of the rx pkt.
+@@ -91,6 +135,7 @@ static int rsi_process_pkt(struct rsi_common *common)
+ 	int status = 0;
+ 	u8 value = 0;
+ 	u8 protocol = 0, unaggr_pkt = 0;
++	struct sk_buff *skb;
+ 
+ #define COEX_PKT 0
+ #define WLAN_PKT 3
+@@ -128,28 +173,30 @@ static int rsi_process_pkt(struct rsi_common *common)
+ 		unaggr_pkt = 1;
+ 
+ 	rcv_pkt_len = (num_blks * 256);
++	
++	if (dev->rx_q.num_rx_pkts >= RSI_SDIO_MAX_RX_PKTS)
++		return -EINVAL;
+ 
+-	common->rx_data_pkt = kmalloc(rcv_pkt_len, GFP_KERNEL);
+-	if (!common->rx_data_pkt) {
+-		rsi_dbg(ERR_ZONE, "%s: Failed in memory allocation\n",
++	skb = dev_alloc_skb(rcv_pkt_len);
++	if (!skb) {
++		rsi_dbg(ERR_ZONE, "%s: Failed to allocate rx packet\n",
+ 			__func__);
+ 		return -ENOMEM;
+ 	}
++	skb_put(skb, rcv_pkt_len);
+ 
+-	status = rsi_sdio_host_intf_read_pkt(adapter,
+-					     common->rx_data_pkt,
+-					     rcv_pkt_len);
++	status = rsi_sdio_host_intf_read_pkt(adapter, skb->data, skb->len);
+ 	if (status) {
+ 		rsi_dbg(ERR_ZONE, "%s: Failed to read packet from card\n",
+ 			__func__);
+-		goto fail;
++		dev_kfree_skb(skb);
++		return status;
+ 	}
++	skb_queue_tail(&dev->rx_q.head, skb);
++	dev->rx_q.num_rx_pkts++;
++	rsi_set_event(&dev->rx_thread.event);
+ 
+-	status = rsi_read_pkt(common, common->rx_data_pkt, rcv_pkt_len);
+-
+-fail:
+-	kfree(common->rx_data_pkt);
+-	return status;
++	return 0;
+ }
+ 
+ /**
+diff --git a/drivers/net/wireless/rsi/rsi_91x_usb.c b/drivers/net/wireless/rsi/rsi_91x_usb.c
+index 75307fd..89a50b6 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_usb.c
++++ b/drivers/net/wireless/rsi/rsi_91x_usb.c
+@@ -36,12 +36,12 @@
+ /* Default operating mode is Wi-Fi alone */
+ #ifdef CONFIG_CARACALLA_BOARD
+ #if defined (CONFIG_RSI_COEX) || defined(CONFIG_RSI_BT_ALONE)
+-u16 dev_oper_mode = DEV_OPMODE_STA_BT_DUAL;
++static u16 dev_oper_mode = DEV_OPMODE_STA_BT_DUAL;
+ #else
+-u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
++static u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
+ #endif
+ #else
+-u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
++static u16 dev_oper_mode = DEV_OPMODE_WIFI_ALONE;
+ #endif
+ module_param(dev_oper_mode, ushort, S_IRUGO);
+ MODULE_PARM_DESC(dev_oper_mode,
+@@ -359,9 +359,14 @@ static void rsi_rx_done_handler(struct urb *urb)
+ 		rsi_dbg(INFO_ZONE, "%s: Zero length packet\n", __func__);
+ 		return;
+ 	}
+-	rx_cb->pend = 1;
++	skb_put(rx_cb->rx_skb, urb->actual_length);
++	skb_queue_tail(&dev->rx_q[rx_cb->ep_num - 1], rx_cb->rx_skb);
+ 
+ 	rsi_set_event(&dev->rx_thread.event);
++
++	if (rsi_rx_urb_submit(dev->priv, rx_cb->ep_num))
++		rsi_dbg(ERR_ZONE, "%s: Failed in urb submission", __func__);
++
+ }
+ 
+ /**
+@@ -370,12 +375,24 @@ static void rsi_rx_done_handler(struct urb *urb)
+  *
+  * Return: 0 on success, a negative error code on failure.
+  */
+-static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num)
++int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num)
+ {
+ 	struct rsi_91x_usbdev *dev = (struct rsi_91x_usbdev *)adapter->rsi_dev;
+ 	struct rx_usb_ctrl_block *rx_cb = &dev->rx_cb[ep_num - 1];
+ 	struct urb *urb = rx_cb->rx_urb;
+ 	int status;
++	struct sk_buff *skb;
++	u8 dword_align_bytes;
++
++	skb = dev_alloc_skb(3000);
++	if (!skb)
++		return -ENOMEM;
++	skb_reserve(skb, 64); /* For dword alignment */
++	dword_align_bytes = (unsigned long)skb->data & 0x3f;
++	if (dword_align_bytes)
++		skb_push(skb, dword_align_bytes);
++	urb->transfer_buffer = skb->data;
++	rx_cb->rx_skb = skb;
+ 
+ 	usb_fill_bulk_urb(urb,
+ 			dev->usbdev,
+@@ -488,12 +505,13 @@ int rsi_usb_load_data_master_write(struct rsi_hw *adapter,
+ 
+ int rsi_usb_check_queue_status(struct rsi_hw *adapter, u8 q_num)
+ {
++	return QUEUE_NOT_FULL;
++
++#if 0
+ 	struct rsi_91x_usbdev *dev = (struct rsi_91x_usbdev *)adapter->rsi_dev;
+ 	int status;
+ 	u32 buf_status = 0;
+ 
+-	return QUEUE_NOT_FULL;
+-
+ 	if (adapter->priv->fsm_state != FSM_MAC_INIT_DONE)
+ 		return QUEUE_NOT_FULL;
+ 
+@@ -534,6 +552,7 @@ int rsi_usb_check_queue_status(struct rsi_hw *adapter, u8 q_num)
+ 		return QUEUE_FULL;
+ 
+ 	return QUEUE_NOT_FULL;
++#endif
+ }
+ 
+ /**
+@@ -549,10 +568,12 @@ static void rsi_deinit_usb_interface(struct rsi_hw *adapter)
+ 	rsi_dbg(INFO_ZONE, "Deinitializing USB interface...\n");
+ 
+ 	rsi_kill_thread(&dev->rx_thread);
+-	kfree(dev->rx_cb[0].rx_buffer);
++	//kfree(dev->rx_cb[0].rx_buffer);
++	skb_queue_purge(&dev->rx_q[0]);
+ 	usb_free_urb(dev->rx_cb[0].rx_urb);
+ #if defined (CONFIG_RSI_BT_ALONE) || defined(CONFIG_RSI_COEX)	
+-	kfree(dev->rx_cb[1].rx_buffer);
++	//kfree(dev->rx_cb[1].rx_buffer);
++	skb_queue_purge(&dev->rx_q[1]);
+ 	usb_free_urb(dev->rx_cb[1].rx_urb);
+ #endif
+ 	kfree(dev->saved_tx_buffer);
+@@ -621,36 +642,26 @@ static int rsi_usb_init_rx(struct rsi_hw *adapter)
+ {
+ 	struct rsi_91x_usbdev *dev = (struct rsi_91x_usbdev *)adapter->rsi_dev;
+ 	struct rx_usb_ctrl_block *rx_cb;
+-	u8 dword_align_bytes = 0, idx;
++	u8 idx;
+ 
+ 	for (idx = 0; idx < MAX_RX_URBS; idx++) {
+ 		rx_cb = &dev->rx_cb[idx];
+ 
+-		rx_cb->rx_buffer = kzalloc(2000 * 4, GFP_KERNEL | GFP_DMA);
+-		if (!rx_cb->rx_buffer)
+-			return -ENOMEM
+-				;
+-		rx_cb->orig_rx_buffer = rx_cb->rx_buffer;
+-		dword_align_bytes = (unsigned long)rx_cb->rx_buffer & 0x3f;
+-		if (dword_align_bytes)
+-			rx_cb->rx_buffer = rx_cb->rx_buffer +
+-					   (64 - dword_align_bytes);
+ 
+ 		rx_cb->rx_urb = usb_alloc_urb(0, GFP_KERNEL);
+ 		if (!rx_cb->rx_urb) {
+ 			rsi_dbg(ERR_ZONE, "Failed alloc rx urb[%d]\n", idx);
+ 			goto err;
+ 		}
+-		rx_cb->rx_urb->transfer_buffer = rx_cb->rx_buffer;
+ 		rx_cb->ep_num = idx + 1;
+ 		rx_cb->data = (void *)dev;
++
++		skb_queue_head_init(&dev->rx_q[idx]);
+ 	}
+ 	return 0;
+ 
+ err:
+-	kfree(rx_cb[0].rx_buffer);
+ 	kfree(rx_cb[0].rx_urb);
+-	kfree(rx_cb[1].rx_buffer);
+ 	kfree(rx_cb[1].rx_urb);
+ 	return -1;
+ }
+@@ -676,6 +687,7 @@ static int rsi_init_usb_interface(struct rsi_hw *adapter,
+ 
+ 	adapter->rsi_dev = rsi_dev;
+ 	rsi_dev->usbdev = interface_to_usbdev(pfunction);
++	rsi_dev->priv = (void *)adapter;
+ 
+ 	if (rsi_find_bulk_in_and_out_endpoints(pfunction, adapter))
+ 		return -EINVAL;
+@@ -708,11 +720,10 @@ static int rsi_init_usb_interface(struct rsi_hw *adapter,
+ 	adapter->check_hw_queue_status = rsi_usb_check_queue_status;
+ 	adapter->determine_event_timeout = rsi_usb_event_timeout;
+ 	adapter->host_intf_ops = &usb_host_intf_ops;
+-	rsi_dev->priv = (void *)adapter;
+ 
+ 	rsi_init_event(&rsi_dev->rx_thread.event);
+ 	status = rsi_create_kthread(common, &rsi_dev->rx_thread,
+-				    rsi_usb_rx_thread, "RX-Thread");
++				    rsi_usb_rx_thread, "USB-RX-Thread");
+ 	if (status) {
+ 		rsi_dbg(ERR_ZONE, "%s: Unable to init rx thrd\n", __func__);
+ 		goto fail_2;
+diff --git a/drivers/net/wireless/rsi/rsi_91x_usb_ops.c b/drivers/net/wireless/rsi/rsi_91x_usb_ops.c
+index 2162ab1..08e1d92 100644
+--- a/drivers/net/wireless/rsi/rsi_91x_usb_ops.c
++++ b/drivers/net/wireless/rsi/rsi_91x_usb_ops.c
+@@ -42,7 +42,7 @@ void rsi_usb_rx_thread(struct rsi_common *common)
+ {
+ 	struct rsi_hw *adapter = common->priv;
+ 	struct rsi_91x_usbdev *dev = (struct rsi_91x_usbdev *)adapter->rsi_dev;
+-	struct rx_usb_ctrl_block *rx_cb;
++	struct sk_buff *skb;
+ 	int status, idx;
+ 
+ 	do {
+@@ -52,28 +52,18 @@ void rsi_usb_rx_thread(struct rsi_common *common)
+ 			break;
+ 
+ 		for (idx = 0; idx < MAX_RX_URBS; idx++) {
+-			rx_cb = &dev->rx_cb[idx];
+-			if (!rx_cb->pend)
+-				continue;
+-			
+-			mutex_lock(&common->rx_lock);
+-			status = rsi_read_pkt(common, rx_cb->rx_buffer, 0);
+-			if (status) {
+-				rsi_dbg(ERR_ZONE, "%s: Failed To read data",
+-					__func__);
+-				mutex_unlock(&common->rx_lock);
+-				break;
+-			}
+-			rx_cb->pend = 0;
+-			mutex_unlock(&common->rx_lock);
+-			
+-			if (adapter->rx_urb_submit(adapter, rx_cb->ep_num)) {
+-				rsi_dbg(ERR_ZONE,
+-					"%s: Failed in urb submission", __func__);
+-				break;
++			while (true) {
++				skb = skb_dequeue(&dev->rx_q[idx]);
++				if (!skb)
++					break;
++
++				status = rsi_read_pkt(common, skb->data, 0);
++				if (status) {
++					rsi_dbg(ERR_ZONE, "%s: Failed To read data",
++							__func__);
++				}
++				dev_kfree_skb(skb);
+ 			}
+-			/* Update TX buffer status */
+-			//rsi_usb_check_queue_status(adapter, 0);
+ 		}
+ 		rsi_reset_event(&dev->rx_thread.event);
+ 	} while (1);
+diff --git a/drivers/net/wireless/rsi/rsi_common.h b/drivers/net/wireless/rsi/rsi_common.h
+index e4aa29e..768647d 100644
+--- a/drivers/net/wireless/rsi/rsi_common.h
++++ b/drivers/net/wireless/rsi/rsi_common.h
+@@ -112,4 +112,7 @@ void init_sdio_intr_status_poll_thread(struct rsi_common *common);
+ #endif
+ void rsi_roc_timeout(unsigned long data);
+ struct ieee80211_vif *rsi_get_vif(struct rsi_hw *adapter, u8 *mac);
++#ifdef CONFIG_RSI_WOW
++int rsi_config_wowlan(struct rsi_hw *adapter, struct cfg80211_wowlan *wowlan);
++#endif
+ #endif
+diff --git a/drivers/net/wireless/rsi/rsi_main.h b/drivers/net/wireless/rsi/rsi_main.h
+index 7f8e911..6df03d5 100644
+--- a/drivers/net/wireless/rsi/rsi_main.h
++++ b/drivers/net/wireless/rsi/rsi_main.h
+@@ -41,7 +41,7 @@ struct rsi_hw;
+ 
+ #include "rsi_ps.h"
+ 
+-#define DRV_VER				"RS9113.NB0.NL.GNU.LNX.1.2.RC13"
++#define DRV_VER				"RS9113.NB0.NL.GNU.LNX.1.2"
+ 
+ #define ERR_ZONE                        BIT(0) /* Error Msgs		*/
+ #define INFO_ZONE                       BIT(1) /* Generic Debug Msgs	*/
+@@ -53,15 +53,16 @@ struct rsi_hw;
+ #define FSM_ZONE                        BIT(7) /* State Machine Msgs	*/
+ #define ISR_ZONE                        BIT(8) /* Interrupt Msgs	*/
+ 
+-#define FSM_CARD_NOT_READY              0
+-#define FSM_COMMON_DEV_PARAMS_SENT	1
+-#define FSM_BOOT_PARAMS_SENT            2
+-#define FSM_EEPROM_READ_MAC_ADDR        3
+-#define FSM_EEPROM_READ_RF_TYPE		4
+-#define FSM_RESET_MAC_SENT              5
+-#define FSM_RADIO_CAPS_SENT             6
+-#define FSM_BB_RF_PROG_SENT             7
+-#define FSM_MAC_INIT_DONE               8
++#define FSM_FW_NOT_LOADED		0
++#define FSM_CARD_NOT_READY              1
++#define FSM_COMMON_DEV_PARAMS_SENT	2
++#define FSM_BOOT_PARAMS_SENT            3
++#define FSM_EEPROM_READ_MAC_ADDR        4
++#define FSM_EEPROM_READ_RF_TYPE		5
++#define FSM_RESET_MAC_SENT              6
++#define FSM_RADIO_CAPS_SENT             7
++#define FSM_BB_RF_PROG_SENT             8
++#define FSM_MAC_INIT_DONE               9
+ 
+ extern u16 rsi_zone_enabled;
+ extern __printf(2, 3) void rsi_dbg(u32 zone, const char *fmt, ...);
+@@ -179,8 +180,8 @@ struct wmm_qinfo {
+ };
+ 
+ struct transmit_q_stats {
+-	u32 total_tx_pkt_send[NUM_EDCA_QUEUES + 1];
+-	u32 total_tx_pkt_freed[NUM_EDCA_QUEUES + 1];
++	u32 total_tx_pkt_send[NUM_EDCA_QUEUES + 2];
++	u32 total_tx_pkt_freed[NUM_EDCA_QUEUES + 2];
+ };
+ 
+ struct vif_priv {
+@@ -285,7 +286,6 @@ struct rsi_common {
+ 
+ 	/* Generic */
+ 	u8 channel;
+-	u8 *rx_data_pkt;
+ 	u8 *saved_rx_data_pkt;
+ 	u8 mac_id;
+ 	u8 radio_id;
+diff --git a/drivers/net/wireless/rsi/rsi_sdio.h b/drivers/net/wireless/rsi/rsi_sdio.h
+index f2ce060..4d9978d 100644
+--- a/drivers/net/wireless/rsi/rsi_sdio.h
++++ b/drivers/net/wireless/rsi/rsi_sdio.h
+@@ -116,6 +116,12 @@ struct receive_info {
+ 	u32 buf_available_counter;
+ };
+ 
++#define RSI_SDIO_MAX_RX_PKTS	32
++struct rsi_sdio_rx_q {
++	u8 num_rx_pkts;
++	struct sk_buff_head head;
++};
++
+ struct rsi_91x_sdiodev {
+ 	struct sdio_func *pfunction;
+ 	struct task_struct *sdio_irq_task;
+@@ -128,6 +134,8 @@ struct rsi_91x_sdiodev {
+ 	u32 tx_blk_size;
+ 	u8 write_fail;
+ 	u8 buff_status_updated;
++	struct rsi_sdio_rx_q rx_q;
++	struct rsi_thread rx_thread;
+ };
+ 
+ void rsi_interrupt_handler(struct rsi_hw *adapter);
+@@ -157,4 +165,5 @@ void rsi_sdio_ack_intr(struct rsi_hw *adapter, u8 int_bit);
+ int rsi_sdio_determine_event_timeout(struct rsi_hw *adapter);
+ int rsi_sdio_check_buffer_status(struct rsi_hw *adapter, u8 q_num);
+ int rsi_read_intr_status_reg(struct rsi_hw *adapter);
++void rsi_sdio_rx_thread(struct rsi_common *common);
+ #endif
+diff --git a/drivers/net/wireless/rsi/rsi_usb.h b/drivers/net/wireless/rsi/rsi_usb.h
+index e16f4a1..a58c87e 100644
+--- a/drivers/net/wireless/rsi/rsi_usb.h
++++ b/drivers/net/wireless/rsi/rsi_usb.h
+@@ -54,10 +54,8 @@
+ struct rx_usb_ctrl_block {
+ 	u8 *data;
+ 	struct urb *rx_urb;
+-	u8 *rx_buffer;
+-	u8 *orig_rx_buffer;
++	struct sk_buff *rx_skb;
+ 	u8 ep_num;
+-	u8 pend;
+ };
+ 
+ struct receive_info {
+@@ -87,6 +85,7 @@ struct rsi_91x_usbdev {
+ 	u8 bulkout_endpoint_addr[MAX_BULK_EP];
+ 	u32 tx_blk_size;
+ 	u8 write_fail;
++	struct sk_buff_head rx_q[MAX_RX_URBS]; 
+ };
+ 
+ static inline int rsi_usb_event_timeout(struct rsi_hw *adapter)
+@@ -111,4 +110,5 @@ int rsi_usb_load_data_master_write(struct rsi_hw *adapter, u32 base_address,
+ 				   u16 block_size,
+ 				   u8 *ta_firmware);
+ int rsi_usb_check_queue_status(struct rsi_hw *adapter, u8 q_num);
++int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num);
+ #endif
+-- 
+2.7.4
+

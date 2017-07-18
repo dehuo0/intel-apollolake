@@ -20,6 +20,7 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0001-mwifiex-enable-pcie-MSIx-interrupt-mode-support.patch \
 	    file://0001-The-patches-for-Redpine-RS9113DB-drivers.patch \
 	    file://0001-rsi-Add-the-WIPHY_FLAG_NETNS_OK-flag-for-the-RSI-MAC.patch \
+	    file://0001-Upgrade-the-Redpine-RS9113DB-drivers-to-RS9113.NB0.N.patch \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
