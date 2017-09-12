@@ -1,0 +1,45 @@
+From d80bad682291393c310018699deb980ffb9df95f Mon Sep 17 00:00:00 2001
+From: Ari Kauppi <ari@synopsys.com>
+Date: Fri, 5 May 2017 16:07:55 -0400
+Subject: [PATCH 15/19] nfsd: fix undefined behavior in nfsd4_layout_verify
+
+commit b550a32e60a4941994b437a8d662432a486235a5 upstream
+
+  UBSAN: Undefined behaviour in fs/nfsd/nfs4proc.c:1262:34
+  shift exponent 128 is too large for 32-bit type 'int'
+
+Depending on compiler+architecture, this may cause the check for
+layout_type to succeed for overly large values (which seems to be the
+case with amd64). The large value will be later used in de-referencing
+nfsd4_layout_ops for function pointers.
+
+Reported-by: Jani Tuovila <tuovila@synopsys.com>
+Signed-off-by: Ari Kauppi <ari@synopsys.com>
+[colin.king@canonical.com: use LAYOUT_TYPE_MAX instead of 32]
+Cc: stable@vger.kernel.org
+Reviewed-by: Dan Carpenter <dan.carpenter@oracle.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: J. Bruce Fields <bfields@redhat.com>
+
+Signed-off-by: Zhang Xiao <xiao.zhang@windriver.com>
+---
+ fs/nfsd/nfs4proc.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/fs/nfsd/nfs4proc.c b/fs/nfsd/nfs4proc.c
+index 2b50bc0c545e..d067f2a1ea35 100644
+--- a/fs/nfsd/nfs4proc.c
++++ b/fs/nfsd/nfs4proc.c
+@@ -1194,7 +1194,8 @@ nfsd4_layout_verify(struct svc_export *exp, unsigned int layout_type)
+ 		return NULL;
+ 	}
+ 
+-	if (exp->ex_layout_type != layout_type) {
++	if (layout_type >= LAYOUT_TYPE_MAX ||
++	    exp->ex_layout_type != layout_type) {
+ 		dprintk("%s: layout type %d not supported\n",
+ 			__func__, layout_type);
+ 		return NULL;
+-- 
+2.11.0
+

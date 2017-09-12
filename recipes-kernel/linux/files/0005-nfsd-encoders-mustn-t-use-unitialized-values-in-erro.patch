@@ -1,0 +1,68 @@
+From 9844c57db618d34fc8c10f192d4278485d833360 Mon Sep 17 00:00:00 2001
+From: "J. Bruce Fields" <bfields@redhat.com>
+Date: Fri, 5 May 2017 16:17:57 -0400
+Subject: [PATCH 05/19] nfsd: encoders mustn't use unitialized values in error
+ cases
+
+commitf961e3f2acae94b727380c0b74e2d3954d0edf79 upstream
+
+In error cases, lgp->lg_layout_type may be out of bounds; so we
+shouldn't be using it until after the check of nfserr.
+
+This was seen to crash nfsd threads when the server receives a LAYOUTGET
+request with a large layout type.
+
+GETDEVICEINFO has the same problem.
+
+Reported-by: Ari Kauppi <Ari.Kauppi@synopsys.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Cc: stable@vger.kernel.org
+Signed-off-by: J. Bruce Fields <bfields@redhat.com>
+Signed-off-by: Zhang Xiao <xiao.zhang@windriver.com>
+---
+ fs/nfsd/nfs4xdr.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/fs/nfsd/nfs4xdr.c b/fs/nfsd/nfs4xdr.c
+index d8297542f8b3..16fcfdd6011c 100644
+--- a/fs/nfsd/nfs4xdr.c
++++ b/fs/nfsd/nfs4xdr.c
+@@ -4021,8 +4021,7 @@ nfsd4_encode_getdeviceinfo(struct nfsd4_compoundres *resp, __be32 nfserr,
+ 		struct nfsd4_getdeviceinfo *gdev)
+ {
+ 	struct xdr_stream *xdr = &resp->xdr;
+-	const struct nfsd4_layout_ops *ops =
+-		nfsd4_layout_ops[gdev->gd_layout_type];
++	const struct nfsd4_layout_ops *ops;
+ 	u32 starting_len = xdr->buf->len, needed_len;
+ 	__be32 *p;
+ 
+@@ -4039,6 +4038,7 @@ nfsd4_encode_getdeviceinfo(struct nfsd4_compoundres *resp, __be32 nfserr,
+ 
+ 	/* If maxcount is 0 then just update notifications */
+ 	if (gdev->gd_maxcount != 0) {
++		ops = nfsd4_layout_ops[gdev->gd_layout_type];
+ 		nfserr = ops->encode_getdeviceinfo(xdr, gdev);
+ 		if (nfserr) {
+ 			/*
+@@ -4091,8 +4091,7 @@ nfsd4_encode_layoutget(struct nfsd4_compoundres *resp, __be32 nfserr,
+ 		struct nfsd4_layoutget *lgp)
+ {
+ 	struct xdr_stream *xdr = &resp->xdr;
+-	const struct nfsd4_layout_ops *ops =
+-		nfsd4_layout_ops[lgp->lg_layout_type];
++	const struct nfsd4_layout_ops *ops;
+ 	__be32 *p;
+ 
+ 	dprintk("%s: err %d\n", __func__, nfserr);
+@@ -4115,6 +4114,7 @@ nfsd4_encode_layoutget(struct nfsd4_compoundres *resp, __be32 nfserr,
+ 	*p++ = cpu_to_be32(lgp->lg_seg.iomode);
+ 	*p++ = cpu_to_be32(lgp->lg_layout_type);
+ 
++	ops = nfsd4_layout_ops[lgp->lg_layout_type];
+ 	nfserr = ops->encode_layoutget(xdr, lgp);
+ out:
+ 	kfree(lgp->lg_content);
+-- 
+2.11.0
+

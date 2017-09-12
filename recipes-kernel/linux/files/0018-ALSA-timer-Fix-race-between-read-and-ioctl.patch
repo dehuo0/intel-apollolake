@@ -1,0 +1,76 @@
+From 6cff870da9abb08a9009c1d7af57ff8a73615177 Mon Sep 17 00:00:00 2001
+From: Takashi Iwai <tiwai@suse.de>
+Date: Fri, 2 Jun 2017 15:03:38 +0200
+Subject: [PATCH 18/19] ALSA: timer: Fix race between read and ioctl
+
+commit d11662f4f798b50d8c8743f433842c3e40fe3378 upstream
+
+The read from ALSA timer device, the function snd_timer_user_tread(),
+may access to an uninitialized struct snd_timer_user fields when the
+read is concurrently performed while the ioctl like
+snd_timer_user_tselect() is invoked.  We have already fixed the races
+among ioctls via a mutex, but we seem to have forgotten the race
+between read vs ioctl.
+
+This patch simply applies (more exactly extends the already applied
+range of) tu->ioctl_lock in snd_timer_user_tread() for closing the
+race window.
+
+Reported-by: Alexander Potapenko <glider@google.com>
+Tested-by: Alexander Potapenko <glider@google.com>
+Cc: <stable@vger.kernel.org>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>
+Signed-off-by: Zhang Xiao <xiao.zhang@windriver.com>
+---
+ sound/core/timer.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/sound/core/timer.c b/sound/core/timer.c
+index 01c1efe91a35..36f3070ac120 100644
+--- a/sound/core/timer.c
++++ b/sound/core/timer.c
+@@ -1930,6 +1930,7 @@ static ssize_t snd_timer_user_read(struct file *file, char __user *buffer,
+ 
+ 	tu = file->private_data;
+ 	unit = tu->tread ? sizeof(struct snd_timer_tread) : sizeof(struct snd_timer_read);
++	mutex_lock(&tu->ioctl_lock);
+ 	spin_lock_irq(&tu->qlock);
+ 	while ((long)count - result >= unit) {
+ 		while (!tu->qused) {
+@@ -1945,7 +1946,9 @@ static ssize_t snd_timer_user_read(struct file *file, char __user *buffer,
+ 			add_wait_queue(&tu->qchange_sleep, &wait);
+ 
+ 			spin_unlock_irq(&tu->qlock);
++			mutex_unlock(&tu->ioctl_lock);
+ 			schedule();
++			mutex_lock(&tu->ioctl_lock);
+ 			spin_lock_irq(&tu->qlock);
+ 
+ 			remove_wait_queue(&tu->qchange_sleep, &wait);
+@@ -1965,7 +1968,6 @@ static ssize_t snd_timer_user_read(struct file *file, char __user *buffer,
+ 		tu->qused--;
+ 		spin_unlock_irq(&tu->qlock);
+ 
+-		mutex_lock(&tu->ioctl_lock);
+ 		if (tu->tread) {
+ 			if (copy_to_user(buffer, &tu->tqueue[qhead],
+ 					 sizeof(struct snd_timer_tread)))
+@@ -1975,7 +1977,6 @@ static ssize_t snd_timer_user_read(struct file *file, char __user *buffer,
+ 					 sizeof(struct snd_timer_read)))
+ 				err = -EFAULT;
+ 		}
+-		mutex_unlock(&tu->ioctl_lock);
+ 
+ 		spin_lock_irq(&tu->qlock);
+ 		if (err < 0)
+@@ -1985,6 +1986,7 @@ static ssize_t snd_timer_user_read(struct file *file, char __user *buffer,
+ 	}
+  _error:
+ 	spin_unlock_irq(&tu->qlock);
++	mutex_unlock(&tu->ioctl_lock);
+ 	return result > 0 ? result : err;
+ }
+ 
+-- 
+2.11.0
+

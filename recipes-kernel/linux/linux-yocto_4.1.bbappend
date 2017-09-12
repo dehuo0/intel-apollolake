@@ -36,6 +36,26 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0013-mbcache2-reimplement-mbcache.patch \
 	    file://0014-ext2-convert-to-mbcache2.patch \
 	    file://0015-ext4-convert-to-mbcache2.patch \
+	    file://mm-larger-stack-guard-gap-between-vmas.patch \
+	    file://0001-TTY-n_hdlc-fix-lockdep-false-positive.patch \
+	    file://0002-ext4-fix-data-exposure-after-a-crash.patch \
+	    file://0003-ALSA-timer-Fix-missing-queue-indices-reset-at-SNDRV_.patch \
+	    file://0004-tty-n_hdlc-get-rid-of-racy-n_hdlc.tbuf.patch \
+	    file://0005-nfsd-encoders-mustn-t-use-unitialized-values-in-erro.patch \
+	    file://0006-char-lp-fix-possible-integer-overflow-in-lp_setup.patch \
+	    file://0007-ipv6-fix-out-of-bound-writes-in-__ip6_append_data.patch \
+	    file://0008-ALSA-msnd-Optimize-harden-DSP-and-MIDI-loops.patch \
+	    file://0009-dentry-name-snapshots.patch \
+	    file://0010-isdn-i4l-fix-buffer-overflow.patch \
+	    file://0011-x86-acpi-Prevent-out-of-bound-access-caused-by-broke.patch \
+	    file://0012-ipv6-avoid-overflow-of-offset-in-ip6_find_1stfragopt.patch \
+	    file://0013-mqueue-fix-a-use-after-free-in-sys_mq_notify.patch \
+	    file://0014-udp-consistently-apply-ufo-or-fragmentation.patch \
+	    file://0015-nfsd-fix-undefined-behavior-in-nfsd4_layout_verify.patch \
+	    file://0016-ALSA-timer-Fix-negative-queue-usage-by-racy-accesses.patch \
+	    file://0017-ALSA-timer-fix-NULL-pointer-dereference-in-read-ioct.patch \
+	    file://0018-ALSA-timer-Fix-race-between-read-and-ioctl.patch \
+	    file://0019-xen-blkback-don-t-leak-stack-data-via-response-ring.patch \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
