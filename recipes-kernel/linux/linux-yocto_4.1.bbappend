@@ -56,6 +56,10 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0017-ALSA-timer-fix-NULL-pointer-dereference-in-read-ioct.patch \
 	    file://0018-ALSA-timer-Fix-race-between-read-and-ioctl.patch \
 	    file://0019-xen-blkback-don-t-leak-stack-data-via-response-ring.patch \
+	    file://0001-scsi-qla2xxx-Fix-an-integer-overflow-in-sysfs-code.patch \
+	    file://0002-Bluetooth-Properly-check-L2CAP-config-option-output-.patch \
+	    file://0003-flow_dissector-Jump-to-exit-code-in-__skb_flow_disse.patch \
+	    file://0004-tcp-initialize-rcv_mss-to-TCP_MIN_MSS-instead-of-0.patch \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
