@@ -1,0 +1,39 @@
+From a39515caf25b73b356477a0079e0a349b0cfd175 Mon Sep 17 00:00:00 2001
+From: Hannes Reinecke <hare@suse.de>
+Date: Fri, 15 Sep 2017 14:05:16 +0200
+Subject: [PATCH 13/19] scsi: sg: fixup infoleak when using
+ SG_GET_REQUEST_TABLE
+
+commit 3e0097499839e0fe3af380410eababe5a47c4cf9 upstream
+
+When calling SG_GET_REQUEST_TABLE ioctl only a half-filled table is
+returned; the remaining part will then contain stale kernel memory
+information.  This patch zeroes out the entire table to avoid this
+issue.
+
+Signed-off-by: Hannes Reinecke <hare@suse.com>
+Reviewed-by: Bart Van Assche <bart.vanassche@wdc.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Reviewed-by: Eric Dumazet <edumazet@google.com>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+Signed-off-by: Zhang Xiao <xiao.zhang@windriver.com>
+---
+ drivers/scsi/sg.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/scsi/sg.c b/drivers/scsi/sg.c
+index 26bc4e9c7441..f8530ebd9558 100644
+--- a/drivers/scsi/sg.c
++++ b/drivers/scsi/sg.c
+@@ -1017,7 +1017,7 @@ sg_ioctl(struct file *filp, unsigned int cmd_in, unsigned long arg)
+ 			sg_req_info_t *rinfo;
+ 			unsigned int ms;
+ 
+-			rinfo = kmalloc(SZ_SG_REQ_INFO * SG_MAX_QUEUE,
++			rinfo = kzalloc(SZ_SG_REQ_INFO * SG_MAX_QUEUE,
+ 								GFP_KERNEL);
+ 			if (!rinfo)
+ 				return -ENOMEM;
+-- 
+2.11.0
+

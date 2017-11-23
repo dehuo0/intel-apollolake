@@ -60,6 +60,24 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0002-Bluetooth-Properly-check-L2CAP-config-option-output-.patch \
 	    file://0003-flow_dissector-Jump-to-exit-code-in-__skb_flow_disse.patch \
 	    file://0004-tcp-initialize-rcv_mss-to-TCP_MIN_MSS-instead-of-0.patch \
+	    file://0002-drm-vmwgfx-NULL-pointer-dereference-in-vmw_surface_d.patch \
+	    file://0003-drm-vmwgfx-limit-the-number-of-mip-levels-in-vmw_gb_.patch \
+	    file://0004-packet-fix-tp_reserve-race-in-packet_set_ring.patch \
+	    file://0005-timerfd-Protect-the-might-cancel-mechanism-proper.patch \
+	    file://0006-Sanitize-move_pages-permission-checks.patch \
+	    file://0007-driver-core-platform-fix-race-condition-with-driver_.patch \
+	    file://0008-kvm-nVMX-Don-t-allow-L2-to-access-the-hardware-CR8.patch \
+	    file://0009-scsi-scsi_transport_iscsi-fix-the-issue-that-iscsi_i.patch \
+	    file://0010-xfs-XFS_IS_REALTIME_INODE-should-be-false-if-no-rt-d.patch \
+	    file://0011-nl80211-check-for-the-required-netlink-attributes-pr.patch \
+	    file://0012-video-fbdev-aty-do-not-leak-uninitialized-padding-in.patch \
+	    file://0013-scsi-sg-fixup-infoleak-when-using-SG_GET_REQUEST_TAB.patch \
+	    file://0014-KEYS-fix-dereferencing-NULL-payload-with-nonzero-len.patch \
+	    file://0015-KEYS-prevent-KEYCTL_READ-on-negative-key.patch \
+	    file://0016-ALSA-seq-Fix-use-after-free-at-creating-a-port.patch \
+	    file://0017-x86-fpu-Don-t-let-userspace-set-bogus-xcomp_bv.patch \
+	    file://0018-packet-hold-bind-lock-when-rebinding-to-fanout-hook.patch \
+	    file://0019-packet-in-packet_do_bind-test-fanout-with-bind_lock-.patch \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
