@@ -78,6 +78,7 @@ SRC_URI += "file://apollolake-standard.scc \
 	    file://0017-x86-fpu-Don-t-let-userspace-set-bogus-xcomp_bv.patch \
 	    file://0018-packet-hold-bind-lock-when-rebinding-to-fanout-hook.patch \
 	    file://0019-packet-in-packet_do_bind-test-fanout-with-bind_lock-.patch \
+	    file://0001-mwifiex-using-right-tid-for-addressing-ra_list.patch \
 	   "
 
 KERNEL_MODULE_PROBECONF += "rsi_usb"
